@@ -11,6 +11,8 @@ import (
   "github.com/aws/aws-sdk-go/service/ssm"
 )
 
+// XXX TODO: handle command-line region override
+
 func main() {
   help := flag.Bool("help", false, "Dispaly usage message")
   prefix := flag.String("prefix", "", "Path prefix for parameter retrieval")
@@ -77,7 +79,7 @@ func normalizeName(n string, prefix string) string {
 }
 
 func usage(err error) {
-  fmt.Fprintf(os.Stderr, "Usage: %s --prefix /some/path [--clear] COMMAND [ARG ...]\n", os.Args[0])
+  fmt.Fprintf(os.Stderr, "Usage: %s --prefix PREFIX [--clean-env] [--region REGION] COMMAND [ARG ...]\n", os.Args[0])
   if err != nil {
     errExit(err)
   }
