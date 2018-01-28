@@ -1,63 +1,107 @@
 package main
 
 import (
-  "flag"
   "fmt"
   "os"
   "os/exec"
   "strings"
 
+  "github.com/aws/aws-sdk-go/aws"
   "github.com/aws/aws-sdk-go/aws/session"
   "github.com/aws/aws-sdk-go/service/ssm"
+  "github.com/urfave/cli"
 )
 
-// XXX TODO: handle command-line region override
-
 func main() {
-  help := flag.Bool("help", false, "Dispaly usage message")
-  prefix := flag.String("prefix", "", "Path prefix for parameter retrieval")
-  clear := flag.Bool("clean-env", false, "Start with an empty environment")
-  flag.Parse()
-  if *help {
-    usage(nil)
+  app := cli.NewApp()
+  app.Name = "env-ssm"
+  app.Usage = "run a command in an environment derived from the SSM parameter store"
+  app.UsageText = "env-ssm [GLOBAL_OPTIONS] COMMAND [ARG ...]"
+  app.Flags = []cli.Flag{
+    cli.StringFlag{
+      Name:  "prefix, p",
+      Usage: "path prefix for parameter retrieval",
+    },
+    cli.BoolFlag{
+      Name:  "clear-env, c",
+      Usage: "start with an empty environment",
+    },
+    cli.StringFlag{
+      Name:  "region, r",
+      Usage: "specify AWS region",
+    },
   }
-  if err := validatePrefix(*prefix); err != nil {
-    usage(err)
-  }
-  if flag.NArg() < 1 {
-    usage(fmt.Errorf("No command was specified"))
-  }
-  env, err := buildEnv(*prefix, *clear)
+  app.Before = validateArgs
+  app.Action = runCommandInEnv
+  app.Run(os.Args)
+}
+
+func runCommandInEnv(c *cli.Context) error {
+  svc, err := initSsmService(c.String("region"))
   if err != nil {
-    errExit(err)
+    return cli.NewExitError(fmt.Sprintf("Failed to initialize SSM client: %v", err), 3)
   }
-  cmdName := flag.Arg(0)
-  argv := flag.Args()[1:]
+  env, err := buildEnvironment(svc, c.String("prefix"), c.Bool("clear-env"))
+  if err != nil {
+    return cli.NewExitError(fmt.Sprintf("Failed to build environment: %v", err), 4)
+  }
+  args := c.Args()
+  cmdName := args[0]
+  argv := args[1:]
   cmd := exec.Command(cmdName, argv...)
   cmd.Stdin = os.Stdin
   cmd.Stdout = os.Stdout
   cmd.Stderr = os.Stderr
   cmd.Env = env
-  if err := cmd.Run(); err != nil {
-    errExit(fmt.Errorf("Failed to run %s: %v", cmdName, err))
+  err = cmd.Run()
+  if err != nil {
+    return cli.NewExitError(err.Error(), 5)
   }
-  os.Exit(0)
+  return nil
 }
 
-func buildEnv(path string, clear bool) ([]string, error) {
+func initSsmService(region string) (*ssm.SSM, error) {
+  var options session.Options
+  if len(region) == 0 {
+    options = session.Options{
+      SharedConfigState: session.SharedConfigEnable,
+    }
+  } else {
+    options = session.Options{
+      Config: aws.Config{Region: aws.String(region)},
+    }
+  }
+  sess, err := session.NewSessionWithOptions(options)
+  if err != nil {
+    return nil, err
+  }
+  return ssm.New(sess), nil
+}
+
+func validateArgs(c *cli.Context) error {
+  path := c.String("prefix")
+  if len(path) == 0 {
+    return cli.NewExitError("--prefix is required", 2)
+  }
+  if !strings.HasPrefix(path, "/") {
+    return cli.NewExitError(fmt.Sprintf("Invalid prefix '%s', prefix should be an absolute path", path), 2)
+  }
+  if c.NArg() == 0 {
+    return cli.NewExitError("No command given", 2)
+  }
+  return nil
+}
+
+func buildEnvironment(svc *ssm.SSM, path string, clear bool) ([]string, error) {
   var env []string
-  if ! clear {
+  if !clear {
     env = os.Environ()
   }
-  if ! strings.HasSuffix(path, "/") {
+  if !strings.HasSuffix(path, "/") {
     path = path + "/"
   }
-  sess := session.Must(session.NewSessionWithOptions(session.Options{
-    SharedConfigState: session.SharedConfigEnable,
-  }))
-  params := &ssm.GetParametersByPathInput{}
+  params := new(ssm.GetParametersByPathInput)
   params.SetPath(path).SetRecursive(true).SetWithDecryption(true)
-  svc := ssm.New(sess)
   err := svc.GetParametersByPathPages(
     params,
     func(page *ssm.GetParametersByPathOutput, lastPage bool) bool {
@@ -76,24 +120,4 @@ func normalizeName(n string, prefix string) string {
   n = strings.TrimPrefix(n, prefix)
   n = strings.Replace(n, "/", "_", -1)
   return strings.ToUpper(n)
-}
-
-func usage(err error) {
-  fmt.Fprintf(os.Stderr, "Usage: %s --prefix PREFIX [--clean-env] [--region REGION] COMMAND [ARG ...]\n", os.Args[0])
-  if err != nil {
-    errExit(err)
-  }
-  os.Exit(0)
-}
-
-func errExit(err error) {
-  fmt.Fprintln(os.Stderr, err.Error())
-  os.Exit(2)
-}
-
-func validatePrefix(s string) error {
-  if ! (len(s) > 1 && strings.HasPrefix(s, "/")) {
-    return fmt.Errorf("Invalid path prefix '%s': must be an absolute path", s)
-  }
-  return nil
 }
