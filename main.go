@@ -119,5 +119,6 @@ func buildEnvironment(svc *ssm.SSM, path string, clear bool) ([]string, error) {
 func normalizeName(n string, prefix string) string {
   n = strings.TrimPrefix(n, prefix)
   n = strings.Replace(n, "/", "_", -1)
+	n = strings.Replace(n, "-", "_", -1)
   return strings.ToUpper(n)
 }
