@@ -5,6 +5,7 @@ import (
   "os"
   "os/exec"
   "strings"
+	"syscall"
 
   "github.com/aws/aws-sdk-go/aws"
   "github.com/aws/aws-sdk-go/aws/session"
@@ -47,17 +48,14 @@ func runCommandInEnv(c *cli.Context) error {
   }
   args := c.Args()
   cmdName := args[0]
-  argv := args[1:]
-  cmd := exec.Command(cmdName, argv...)
-  cmd.Stdin = os.Stdin
-  cmd.Stdout = os.Stdout
-  cmd.Stderr = os.Stderr
-  cmd.Env = env
-  err = cmd.Run()
-  if err != nil {
-    return cli.NewExitError(err.Error(), 5)
-  }
-  return nil
+	cmdPath, err := exec.LookPath(cmdName)
+	if err != nil {
+		return cli.NewExitError(fmt.Sprintf("Command %s not found: %v", cmdName, err), 5)
+	}
+	if err := syscall.Exec(cmdPath, args, env); err != nil {
+		return cli.NewExitError(fmt.Sprintf("Failed to execute %s: %v", cmdPath, err), 5)
+	}
+	return nil
 }
 
 func initSsmService(region string) (*ssm.SSM, error) {
